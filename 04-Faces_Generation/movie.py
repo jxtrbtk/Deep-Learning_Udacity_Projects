@@ -40,27 +40,29 @@ from os.path import isfile, join
 #------------------------------------------------------------------------------
 #data loader
 data_dir = "processed_celeba_small"
-batch_size = 8
+batch_size = 16
 img_size = 5*32
 #model
-d_conv_dim = 108
-g_conv_dim = 192
-z_size = 111
+d_conv_dim = 96
+g_conv_dim = 128
+z_size = 128
 # optimizer
 lrd = 0.0002
 lrg = 0.0002
 beta1=0.5
 beta2=0.999
 # training
-n_epochs = 27
-loop_coeff = 0.000347
-loop_coeff_add = -0.000000000888 
+n_epochs = 50
+loop_coeff = 0.0        #  0.000347
+loop_coeff_add = 0.0    # -0.000000000888 
 # video export
 pathIn = 'data'
-pathOut = 'video6.avi'
+pathOut = 'video20.avi'
 fps = 30
 celeb_order = ["00","01","02","03","04","05","06","07","08","09","10","11"]
-max_idx = 17_678
+start_idx = 35789    
+end_idx = start_idx + 8520 + 1
+
 LOOP_TRAINING = True
 LOOP_MOVIE = True
 
@@ -68,17 +70,19 @@ LOOP_MOVIE = True
 #--- debug --------------------------------------------------------------------
 #pathIn = 'data2'
 #pathOut = 'video9.avi'
-#fps = 30
+#fps = 1
 #celeb_order = ["00","01","02","03","04","05","06","07","08","09","10","11"]
-#max_idx = 50
+#start_idx = 3
+#end_idx = 8
 #LOOP_TRAINING = True
 #LOOP_MOVIE = True
 #img_size = 1*32
+#batch_size = 1024
 ##model
 #d_conv_dim = 16
 #g_conv_dim = 16
 #z_size = 16
-#n_epochs = 1
+#n_epochs = 10
 #--- debug --------------------------------------------------------------------
 
 
@@ -165,8 +169,8 @@ class Discriminator(nn.Module):
         self.conv3 = conv(conv_dim*2, conv_dim*4, 4)           #  8x 8 x 4 conv_dim
         self.conv4 = conv(conv_dim*4, conv_dim*4, 4)           #  4x 4 x 8 conv_dim
  
-        self.fc1 = nn.Linear(conv_dim*4*int(img_size/16)*int(img_size/16), conv_dim)
-        #self.fc2 = nn.Linear(conv_dim*2, conv_dim)
+        self.fc1 = nn.Linear(conv_dim*4*int(img_size/16)*int(img_size/16), conv_dim*2)
+        self.fc2 = nn.Linear(conv_dim*2, conv_dim)
         self.fc3 = nn.Linear(conv_dim, 1)
 
         self.leaky_relu = nn.LeakyReLU(negative_slope=0.2)
@@ -200,9 +204,9 @@ class Discriminator(nn.Module):
         x = self.fc1(x)
         x = self.relu(x)
         x = self.dropout(x) 
-        #x = self.fc2(x)
-        #x = self.relu(x)
-        #x = self.dropout(x) 
+        x = self.fc2(x)
+        x = self.relu(x)
+        x = self.dropout(x) 
         x = self.fc3(x)
         x = self.sigmoid(x)        
         
@@ -241,22 +245,19 @@ class Generator(nn.Module):
 
         self.conv_dim = conv_dim
         self.fc = nn.Linear(z_size, conv_dim*8*int(img_size/32)*int(img_size/32))
-                                                                      #  4x  4 x 8 conv_dim 
-        self.deconv0 = deconv(conv_dim*8, conv_dim*4, 4)              #  8x  8 x 4 conv_dim
-        self.deconv1 = deconv(conv_dim*4, conv_dim*4, 3, stride=1)    #  8x  8 x 4 conv_dim
-        self.deconv2 = deconv(conv_dim*4, conv_dim*2, 4)              # 16x 16 x 2 conv_dim
-        self.deconv3 = deconv(conv_dim*2, conv_dim*2, 3, stride=1)    # 16x 16 x 2 conv_dim
-        self.deconv4 = deconv(conv_dim*2, conv_dim, 4)                # 32x 32 x 1 conv_dim
-        self.deconv5 = deconv(conv_dim, conv_dim, 3, stride=1)        # 32x 32 x 1 conv_dim
-        self.deconv6 = deconv(conv_dim, conv_dim, 4)                  # 64x 64 x 1 conv_dim
-        self.deconv7 = deconv(conv_dim, conv_dim, 3, stride=1)        # 64x 64 x 1 conv_dim
-        self.deconv8 = deconv(conv_dim, conv_dim, 4)                  #128x128 x 1 conv_dim
-        self.deconv9 = deconv(conv_dim, 3, 4)                         #128x128 x 3
+                                                          #  4x  4 x 8 conv_dim 
+        self.deconv1 = deconv(conv_dim*8, conv_dim*4, 4)  #  8x  8 x 2 conv_dim
+        self.deconv2 = deconv(conv_dim*4, conv_dim*2, 4)  # 16x 16 x conv_dim
+        self.deconv3 = deconv(conv_dim*2, conv_dim, 4)    # 32x 32 x conv_dim
+        self.deconv4 = deconv(conv_dim, conv_dim, 4)      # 64x 64 x conv_dim
+        self.deconv5 = deconv(conv_dim, conv_dim, 4)      #128x128 x conv_dim
+        self.deconv6 = deconv(conv_dim, conv_dim, 4)      #256x256 x conv_dim
 
+        self.conv = conv(conv_dim, 3, 4, batch_norm=False)#128x128 x 3  
         
         self.relu = nn.ReLU()
         self.tanh = nn.Tanh()
-        self.dropout = nn.Dropout(p=0.38)
+        self.dropout = nn.Dropout(p=0.22)
 
     def forward(self, x):
         """
@@ -266,20 +267,23 @@ class Generator(nn.Module):
         """
         # define feedforward behavior
         x = self.fc(x)
-        #x = self.dropout(x)
+        x = self.dropout(x)
 
         x = x.view(-1, self.conv_dim*8, int(img_size/32), int(img_size/32))
         
-        x = self.relu(self.deconv0(x))
-        x = self.relu(self.deconv1(x))
-        x = self.relu(self.deconv2(x))
-        x = self.relu(self.deconv3(x))
-        x = self.relu(self.deconv4(x))
-        x = self.relu(self.deconv5(x))
-        x = self.relu(self.deconv6(x))
-        x = self.relu(self.deconv7(x))
-        x = self.relu(self.deconv8(x))
-        x = self.deconv9(x)
+        x = self.deconv1(x)
+        x = self.relu(x)
+        x = self.deconv2(x)
+        x = self.relu(x)
+        x = self.deconv3(x)
+        x = self.relu(x)
+        x = self.deconv4(x)
+        x = self.relu(x)
+        x = self.deconv5(x)
+        x = self.relu(x)
+        x = self.deconv6(x)
+        x = self.relu(x)
+        x = self.conv(x)
         x = self.tanh(x)
         
         return x
@@ -304,7 +308,7 @@ def calc_loss(D_out, labels, train_on_gpu):
     loss = criterion(D_out, labels)
     return loss
 
-def real_loss(D_out, train_on_gpu, smooth=1.0):
+def real_loss(D_out, train_on_gpu, smooth):
     '''Calculates how close discriminator outputs are to being real.
        param, D_out: discriminator logits
        return: real loss'''
@@ -330,7 +334,6 @@ def train(D, G, d_optimizer, g_optimizer, celeba_train_loader, train_on_gpu=True
        return: D and G losses'''
     global loop_coeff
     global loop_coeff_add
-    global loop_coeff_mul
     
     # move models to GPU
     if train_on_gpu:
@@ -353,6 +356,8 @@ def train(D, G, d_optimizer, g_optimizer, celeba_train_loader, train_on_gpu=True
     if train_on_gpu:
         fixed_z = fixed_z.cuda()
 
+    if not os.path.exists(pathIn):
+        os.mkdir(pathIn)
     for i in range(0,fixed_z.shape[0]):
         path = os.path.join(pathIn, "{0:02d}".format(i))
         if not os.path.exists(path):
@@ -379,7 +384,7 @@ def train(D, G, d_optimizer, g_optimizer, celeba_train_loader, train_on_gpu=True
             d_optimizer.zero_grad()
             # 1.1 real - pass real images, calculate loss assuming those are real images
             D_real = D(real_images)
-            d_real_loss = real_loss(D_real, train_on_gpu, 0.9)
+            d_real_loss = real_loss(D_real, train_on_gpu, 1.0)
             # 1.2 fake - pass fake images, calculate loss assuming those are fakes
             z = np.random.uniform(-1, 1, size=(batch_size, z_size))
             z = torch.from_numpy(z).float()
@@ -390,12 +395,12 @@ def train(D, G, d_optimizer, g_optimizer, celeba_train_loader, train_on_gpu=True
             d_fake_loss = fake_loss(D_fake, train_on_gpu)
             # 1.3 overall loss and backprop
             d_loss = d_real_loss + d_fake_loss
-            nn.utils.clip_grad_norm_(D.parameters(), 5)
+            nn.utils.clip_grad_norm_(D.parameters(), 7)
             d_loss.backward()
             d_optimizer.step()
             
             # 2. Train the generator with an adversarial loss
-            D.eval()
+            D.train() #weird, but seems not working in eval mode
             G.train()
             g_optimizer.zero_grad()
             # 1.1 generate images
@@ -406,8 +411,8 @@ def train(D, G, d_optimizer, g_optimizer, celeba_train_loader, train_on_gpu=True
             gen_images = G(z)
             # 1.2 pass generated images to the discriminator to score them as real 
             D_gen = D(gen_images)
-            g_loss = real_loss(D_gen, train_on_gpu)
-            nn.utils.clip_grad_norm_(G.parameters(), 5)
+            g_loss = real_loss(D_gen, train_on_gpu, 1.0)
+            nn.utils.clip_grad_norm_(G.parameters(), 7)
             g_loss.backward()
             g_optimizer.step()
             
@@ -420,24 +425,37 @@ def train(D, G, d_optimizer, g_optimizer, celeba_train_loader, train_on_gpu=True
                         epoch+1, n_epochs,loop_score,img_generation,d_loss.item(), d_real_loss.item(), d_fake_loss.item(), g_loss.item()))
 
             ## AFTER A NUMBER OF LOOPS ##    
-            loop_score = loop_score+loop_coeff
+            loop_score = loop_score + loop_coeff
+            loop_coeff = loop_coeff + loop_coeff_add
             if loop_total_no % max(1,int(loop_score)) == 0:
-                G.eval() # for generating images
-                with torch.no_grad():
-                    samples_z = G(fixed_z)
-                    samples_z = samples_z.detach().cpu()
-                    for i in range(0,samples_z.shape[0]):
-                        img_path = os.path.join(pathIn, "{0:02d}".format(i), "{0:02d}_{1:08d}.png".format(i, img_generation))
-                        save_image(samples_z[i], img_path, normalize=True)                        
-                G.train() # back to training mode
+                if img_generation >= start_idx and img_generation <= end_idx: 
+                    G.eval() # for generating images
+                    with torch.no_grad():
+                        samples_z = G(fixed_z)
+                        samples_z = samples_z.detach().cpu()
+                        for i in range(0,samples_z.shape[0]):
+                            img_path = os.path.join(pathIn, "{0:02d}".format(i), "{0:02d}_{1:08d}.png".format(i, img_generation))
+                            save_image(samples_z[i], img_path, normalize=True)                        
+                    G.train() # back to training mode
                 img_generation = img_generation+1
             loop_total_no += 1
             #print('Epoch ]{:3d} | {:4.6f} | {:4.6f} ['.format(loop_total_no, loop_score,loop_coeff))
 
-            if img_generation >= max_idx: break
+#            if img_generation >= end_idx: break
+        
+        ## End of Batch
         torch.save(G.state_dict(), 'ModelG.pth')
         torch.save(D.state_dict(), 'ModelD.pth')
-        if img_generation >= max_idx: break
+        G.eval() # for generating images
+        with torch.no_grad():
+        	samples_z = G(fixed_z)
+        	samples_z = samples_z.detach().cpu()
+        	for i in range(0,samples_z.shape[0]):
+        		img_path = os.path.join(pathIn, "{0:02d}_{1:08d}.png".format(i, img_generation))
+        		save_image(samples_z[i], img_path, normalize=True)    
+        G.train() # back to training mode
+		
+#        if img_generation >= end_idx: break
 #------------------------------------------------------------------------------
 #### UDACITY #########################
 
@@ -534,11 +552,11 @@ def main():
     if LOOP_MOVIE :
 	
         #generate video
-        img = get_full_image(pathIn, celeb_order, 0)
+        img = get_full_image(pathIn, celeb_order, start_idx)
         height, width, layers = img.shape
         size = (width,height)
         out = cv2.VideoWriter(pathOut,cv2.VideoWriter_fourcc(*'DIVX'), fps, size)
-        for idx in range(0 , max_idx):
+        for idx in range(start_idx, end_idx):
             img = get_full_image(pathIn, celeb_order, idx)
             out.write(img)
             if idx % 25 == 0 : print("frame {}".format(idx))
